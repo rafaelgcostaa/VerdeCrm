@@ -10,7 +10,7 @@ import { NewLeadModal } from './components/NewLeadModal';
 import { INITIAL_TAGS, INITIAL_AUTOMATIONS } from './constants';
 import { Page, Lead, Tag } from './types';
 import { db } from './services/database';
-import { processInboundLead } from './api/webhook';
+import { processInboundLeadSimulation } from './services/webhookSimulation';
 
 function App() {
   const [activePage, setActivePage] = useState<Page>(Page.DASHBOARD);
@@ -88,7 +88,7 @@ function App() {
   // Logic to simulate incoming webhook from N8N (via Settings Page)
   const handleWebhookSimulation = async (data: any, apiKey: string) => {
     // Call the simulated API endpoint with the provided Key
-    const response = await processInboundLead(data, apiKey);
+    const response = await processInboundLeadSimulation(data, apiKey);
     
     if (response.success) {
         // Refresh data to show new lead
