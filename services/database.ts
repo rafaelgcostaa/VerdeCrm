@@ -121,7 +121,8 @@ export const db = {
     }
   },
 
-  moveLeadStage: async (leadId: string, newStageTagId: string, allTags: Tag[]): Promise<void> => {
+  moveLeadStage: async (leadId: string, newStageTagId: string): Promise<void> => {
+    const allTags = await db.getTags();
     // Atualiza localmente primeiro (Optimistic UI já feito no componente, mas garantimos persistência local)
     const currentLeads = getLocalLeads();
     const stageTagIds = allTags.filter(t => t.isKanbanColumn).map(t => t.id);

@@ -6,11 +6,10 @@ import { LeadProfile } from './components/LeadProfile';
 import { Automations } from './components/Automations';
 import { TagManager } from './components/TagManager';
 import { Settings } from './components/Settings';
-import { NewLeadModal } from './components/NewLeadModal';
-import { INITIAL_TAGS, INITIAL_AUTOMATIONS } from './constants';
+import { INITIAL_AUTOMATIONS } from './constants';
 import { Page, Lead, Tag } from './types';
 import { db } from './services/database';
-import { processInboundLeadSimulation } from './services/webhookSimulation';
+import { supabase } from './services/supabaseClient';
 
 function App() {
   const [activePage, setActivePage] = useState<Page>(Page.DASHBOARD);
@@ -20,24 +19,60 @@ function App() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isNewLeadModalOpen, setIsNewLeadModalOpen] = useState(false);
+  const [lastSync, setLastSync] = useState<Date>(new Date());
 
   // In a real app, this would be fetched too
   const automations = INITIAL_AUTOMATIONS;
 
-  // Load Data on Mount
-  useEffect(() => {
-    const loadData = async () => {
-      setIsLoading(true);
+  // Função centralizada de carregamento de dados
+  const fetchLeadsData = async (background = false) => {
+    if (!background) setIsLoading(true);
+    try {
       const [fetchedLeads, fetchedTags] = await Promise.all([
         db.getLeads(),
         db.getTags()
       ]);
       setLeads(fetchedLeads);
-      setTags(fetchedTags);
-      setIsLoading(false);
+      if (!background) setTags(fetchedTags);
+      setLastSync(new Date());
+    } catch (error) {
+      console.error("Erro ao sincronizar dados:", error);
+    } finally {
+      if (!background) setIsLoading(false);
+    }
+  };
+
+  // 1. Initial Load & Realtime Subscription
+  useEffect(() => {
+    fetchLeadsData();
+
+    // Inscreve no Realtime do Supabase
+    const subscription = db.subscribeToLeads(
+      (newLead) => {
+        setLeads(prev => {
+          // Evita duplicatas caso o polling tenha acabado de rodar
+          if (prev.some(l => l.id === newLead.id)) return prev;
+          return [newLead, ...prev];
+        });
+      },
+      (updatedLead) => {
+        setLeads(prev => prev.map(l => l.id === updatedLead.id ? updatedLead : l));
+      }
+    );
+
+    return () => {
+      supabase.removeChannel(subscription);
     };
-    loadData();
+  }, []);
+
+  // 2. Polling Fallback (60s)
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      console.log('🔄 Polling automático executando...');
+      fetchLeadsData(true);
+    }, 60000); // 60 segundos
+
+    return () => clearInterval(intervalId);
   }, []);
 
   const handleNavigate = (page: Page) => {
@@ -63,50 +98,21 @@ function App() {
     }));
 
     // Persist to DB
-    await db.moveLeadStage(leadId, newColumnTagId);
-  };
-
-  // Logic to add a new lead (Manual)
-  const handleCreateLead = async (data: any) => {
-    // Optimistic ID generation matching DB format
-    const optimisticId = `lead_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const newLead: Lead = {
-      id: optimisticId,
-      name: data.name,
-      phone: data.phone,
-      email: data.email,
-      source: data.source,
-      company: data.company,
-      createdAt: new Date().toISOString().split('T')[0],
-      tags: [tags[0].id] // Default to first column
-    };
-    
-    // Optimistic Update
-    setLeads(prev => [newLead, ...prev]);
-    // Persist
-    await db.createLead(newLead);
-  };
-
-  // Logic to simulate incoming webhook from N8N (via Settings Page)
-  const handleWebhookSimulation = async (data: any, apiKey: string) => {
-    // Call the simulated API endpoint with the provided Key
-    const response = await processInboundLeadSimulation(data, apiKey);
-    
-    if (response.success) {
-        // Refresh data to show new lead
-        const updatedLeads = await db.getLeads();
-        setLeads(updatedLeads);
-        return { success: true };
-    } else {
-        return { success: false, error: response.error };
+    try {
+      await db.moveLeadStage(leadId, newColumnTagId);
+    } catch (e) {
+      // Revert Optimistic UI if failed (Opcional: Adicionar toast de erro)
+      console.error("Falha ao mover card, revertendo UI...");
+      fetchLeadsData(true); 
     }
   };
 
   const renderContent = () => {
     if (isLoading) {
         return (
-            <div className="flex h-full items-center justify-center">
+            <div className="flex flex-col h-full items-center justify-center gap-4">
                 <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+                <p className="text-neutral-500 text-sm animate-pulse">Sincronizando com Supabase...</p>
             </div>
         );
     }
@@ -124,7 +130,8 @@ function App() {
             tags={tags} 
             onLeadClick={handleLeadClick} 
             onLeadMove={handleLeadMove}
-            onNewLead={() => setIsNewLeadModalOpen(true)}
+            onRefresh={() => fetchLeadsData(true)}
+            lastSync={lastSync}
         />;
       case Page.LEAD_PROFILE:
         return <div className="text-center py-20 text-neutral-500">Selecione um lead no Kanban para ver detalhes.</div>;
@@ -133,7 +140,7 @@ function App() {
       case Page.AUTOMATIONS:
         return <Automations automations={automations} />;
       case Page.SETTINGS:
-        return <Settings onSimulateWebhook={handleWebhookSimulation} />;
+        return <Settings />;
       default:
         return <Dashboard leads={leads} />;
     }
@@ -142,11 +149,6 @@ function App() {
   return (
     <Layout activePage={activePage} onNavigate={handleNavigate}>
       {renderContent()}
-      <NewLeadModal 
-        isOpen={isNewLeadModalOpen} 
-        onClose={() => setIsNewLeadModalOpen(false)} 
-        onSubmit={handleCreateLead}
-      />
     </Layout>
   );
 }
