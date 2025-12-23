@@ -68,8 +68,10 @@ function App() {
 
   // Logic to add a new lead (Manual)
   const handleCreateLead = async (data: any) => {
+    // Optimistic ID generation matching DB format
+    const optimisticId = `lead_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const newLead: Lead = {
-      id: `l${Date.now()}`,
+      id: optimisticId,
       name: data.name,
       phone: data.phone,
       email: data.email,

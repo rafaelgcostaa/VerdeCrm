@@ -35,12 +35,21 @@ export const db = {
     return data ? JSON.parse(data) : [];
   },
 
-  createLead: async (lead: Lead): Promise<Lead> => {
+  createLead: async (data: Omit<Lead, 'id' | 'createdAt'> & { id?: string, createdAt?: string }): Promise<Lead> => {
     await delay(400);
     const leads = JSON.parse(localStorage.getItem(DB_KEYS.LEADS) || '[]');
-    const newLeads = [lead, ...leads];
+    
+    // Constrói o novo Lead garantindo ID único e Data formatada se não fornecidos
+    const newLead: Lead = {
+      ...data,
+      id: data.id || `lead_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      createdAt: data.createdAt || new Date().toISOString().split('T')[0],
+      tags: data.tags || []
+    };
+
+    const newLeads = [newLead, ...leads];
     localStorage.setItem(DB_KEYS.LEADS, JSON.stringify(newLeads));
-    return lead;
+    return newLead;
   },
 
   updateLead: async (updatedLead: Lead): Promise<Lead> => {
