@@ -144,7 +144,7 @@ export const Settings: React.FC<SettingsProps> = ({ onSimulateWebhook }) => {
                         <label className="block text-xs font-bold text-neutral-500 uppercase mb-1">Method & URL</label>
                         <div className="flex items-center gap-2 bg-neutral-900 border border-neutral-800 rounded-lg p-3 font-mono text-sm text-white">
                         <span className="text-green-400 font-bold">POST</span>
-                        <span className="flex-1 opacity-80">https://verdecrm.com.br/api/leads/inbound</span>
+                        <span className="flex-1 opacity-80">https://rafaocrm.vercel.app/api/leads/inbound</span>
                         </div>
                     </div>
 
