@@ -1,5 +1,7 @@
 import { Tag, Lead, Automation } from './types';
 
+export const SYSTEM_API_KEY = "sk_live_vrm_9823_secure_x1y2z3";
+
 export const INITIAL_TAGS: Tag[] = [
   { id: 't1', name: 'Novo Lead', color: 'bg-blue-100 text-blue-800', type: 'automatic', isKanbanColumn: true },
   { id: 't2', name: 'Facebook Ads', color: 'bg-indigo-100 text-indigo-800', type: 'automatic', isKanbanColumn: true },

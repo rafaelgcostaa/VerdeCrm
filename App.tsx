@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Layout } from './components/Layout';
 import { Dashboard } from './components/Dashboard';
 import { KanbanBoard } from './components/KanbanBoard';
@@ -7,19 +7,38 @@ import { Automations } from './components/Automations';
 import { TagManager } from './components/TagManager';
 import { Settings } from './components/Settings';
 import { NewLeadModal } from './components/NewLeadModal';
-import { INITIAL_TAGS, INITIAL_LEADS, INITIAL_AUTOMATIONS } from './constants';
+import { INITIAL_TAGS, INITIAL_AUTOMATIONS } from './constants';
 import { Page, Lead, Tag } from './types';
+import { db } from './services/database';
+import { processInboundLead } from './api/webhook';
 
 function App() {
   const [activePage, setActivePage] = useState<Page>(Page.DASHBOARD);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   
   // App State
-  const [leads, setLeads] = useState<Lead[]>(INITIAL_LEADS);
-  const [tags, setTags] = useState<Tag[]>(INITIAL_TAGS);
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [isNewLeadModalOpen, setIsNewLeadModalOpen] = useState(false);
 
+  // In a real app, this would be fetched too
   const automations = INITIAL_AUTOMATIONS;
+
+  // Load Data on Mount
+  useEffect(() => {
+    const loadData = async () => {
+      setIsLoading(true);
+      const [fetchedLeads, fetchedTags] = await Promise.all([
+        db.getLeads(),
+        db.getTags()
+      ]);
+      setLeads(fetchedLeads);
+      setTags(fetchedTags);
+      setIsLoading(false);
+    };
+    loadData();
+  }, []);
 
   const handleNavigate = (page: Page) => {
     setActivePage(page);
@@ -34,24 +53,21 @@ function App() {
   };
 
   // Logic to move a lead between columns
-  const handleLeadMove = (leadId: string, newColumnTagId: string) => {
+  const handleLeadMove = async (leadId: string, newColumnTagId: string) => {
+    // Optimistic UI Update
     setLeads(prevLeads => prevLeads.map(lead => {
       if (lead.id !== leadId) return lead;
-
-      // Remove any existing column tags
       const columnTagIds = tags.filter(t => t.isKanbanColumn).map(t => t.id);
       const otherTags = lead.tags.filter(tId => !columnTagIds.includes(tId));
-      
-      // Add the new column tag
-      return {
-        ...lead,
-        tags: [...otherTags, newColumnTagId]
-      };
+      return { ...lead, tags: [...otherTags, newColumnTagId] };
     }));
+
+    // Persist to DB
+    await db.moveLeadStage(leadId, newColumnTagId, tags);
   };
 
   // Logic to add a new lead (Manual)
-  const handleCreateLead = (data: any) => {
+  const handleCreateLead = async (data: any) => {
     const newLead: Lead = {
       id: `l${Date.now()}`,
       name: data.name,
@@ -60,43 +76,39 @@ function App() {
       source: data.source,
       company: data.company,
       createdAt: new Date().toISOString().split('T')[0],
-      // Default to first column (Novo Lead)
-      tags: [tags[0].id] 
-    };
-    setLeads(prev => [newLead, ...prev]);
-  };
-
-  // Logic to simulate incoming webhook from N8N
-  const handleWebhookSimulation = (data: any) => {
-    const newLead: Lead = {
-      id: `l-webhook-${Date.now()}`,
-      name: data.nome,
-      phone: data.telefone,
-      email: data.email,
-      source: data.origem,
-      company: 'Empresa (Webhook)',
-      campaign: data.campanha,
-      message: data.mensagem,
-      createdAt: new Date().toISOString().split('T')[0],
-      // Apply logic based on prompt: "Novo Lead", "Facebook Ads" (if applicable), etc.
-      tags: [tags[0].id] // Start in 'Novo Lead'
+      tags: [tags[0].id] // Default to first column
     };
     
-    // Optional: Add extra tags based on source
-    if (data.origem === 'Facebook Ads') {
-        const fbTag = tags.find(t => t.name === 'Facebook Ads');
-        if (fbTag) newLead.tags.push(fbTag.id);
-    }
-    if (data.origem === 'WhatsApp') {
-        const wppTag = tags.find(t => t.name === 'WhatsApp');
-        if (wppTag) newLead.tags.push(wppTag.id);
-    }
-
+    // Optimistic Update
     setLeads(prev => [newLead, ...prev]);
-    // Optional: Auto-navigate to show result, or just let notification handle it
+    // Persist
+    await db.createLead(newLead);
+  };
+
+  // Logic to simulate incoming webhook from N8N (via Settings Page)
+  const handleWebhookSimulation = async (data: any, apiKey: string) => {
+    // Call the simulated API endpoint with the provided Key
+    const response = await processInboundLead(data, apiKey);
+    
+    if (response.success) {
+        // Refresh data to show new lead
+        const updatedLeads = await db.getLeads();
+        setLeads(updatedLeads);
+        return { success: true };
+    } else {
+        return { success: false, error: response.error };
+    }
   };
 
   const renderContent = () => {
+    if (isLoading) {
+        return (
+            <div className="flex h-full items-center justify-center">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+            </div>
+        );
+    }
+
     if (selectedLead && activePage === Page.LEAD_PROFILE) {
         return <LeadProfile lead={selectedLead} allTags={tags} onBack={() => setActivePage(Page.KANBAN)} />;
     }
