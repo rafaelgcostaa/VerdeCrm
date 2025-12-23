@@ -1,5 +1,6 @@
-import { Lead, Tag, Automation } from '../types';
-import { INITIAL_LEADS, INITIAL_TAGS, INITIAL_AUTOMATIONS } from '../constants';
+import { Lead, Tag } from '../types';
+import { supabase } from '../src/services/supabaseClient';
+import { INITIAL_TAGS, INITIAL_LEADS } from '../constants';
 
 const DB_KEYS = {
   LEADS: 'verdecrm_leads',
@@ -7,73 +8,156 @@ const DB_KEYS = {
   AUTOMATIONS: 'verdecrm_automations'
 };
 
-// Simulate Network Latency
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+// Helper para obter leads locais (Fallback)
+const getLocalLeads = (): Lead[] => {
+  const data = localStorage.getItem(DB_KEYS.LEADS);
+  return data ? JSON.parse(data) : INITIAL_LEADS;
+};
+
+// Helper para salvar leads locais
+const saveLocalLeads = (leads: Lead[]) => {
+  localStorage.setItem(DB_KEYS.LEADS, JSON.stringify(leads));
+};
 
 export const db = {
   init: () => {
-    if (!localStorage.getItem(DB_KEYS.LEADS)) {
-      localStorage.setItem(DB_KEYS.LEADS, JSON.stringify(INITIAL_LEADS));
-    }
+    // Inicializa dados locais para garantir funcionamento offline/demo
     if (!localStorage.getItem(DB_KEYS.TAGS)) {
       localStorage.setItem(DB_KEYS.TAGS, JSON.stringify(INITIAL_TAGS));
     }
-    if (!localStorage.getItem(DB_KEYS.AUTOMATIONS)) {
-      localStorage.setItem(DB_KEYS.AUTOMATIONS, JSON.stringify(INITIAL_AUTOMATIONS));
+    if (!localStorage.getItem(DB_KEYS.LEADS)) {
+      localStorage.setItem(DB_KEYS.LEADS, JSON.stringify(INITIAL_LEADS));
     }
   },
 
   getLeads: async (): Promise<Lead[]> => {
-    await delay(300);
-    const data = localStorage.getItem(DB_KEYS.LEADS);
-    return data ? JSON.parse(data) : [];
+    try {
+      // Tenta buscar leads do Supabase
+      const { data, error } = await supabase
+        .from('leads')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      // Mapeia os campos do Banco (Português/Snake_case) para o Frontend (Inglês/CamelCase)
+      const mappedLeads = (data || []).map((row: any) => ({
+        id: row.id,
+        name: row.nome,
+        phone: row.telefone,
+        email: row.email || '',
+        source: row.origem || 'Desconhecido',
+        company: row.empresa,
+        campaign: row.campanha,
+        message: row.mensagem,
+        createdAt: row.created_at ? row.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
+        tags: row.etiquetas || []
+      }));
+      
+      // Sincroniza dados do banco com o local para cache/backup
+      if (mappedLeads.length > 0) {
+        saveLocalLeads(mappedLeads);
+      }
+      
+      return mappedLeads;
+
+    } catch (error: any) {
+      console.warn('⚠️ Supabase indisponível (Usando dados locais):', error.message || error);
+      return getLocalLeads();
+    }
   },
 
   getTags: async (): Promise<Tag[]> => {
-    await delay(100);
+    // Simulação local para Tags (Foco no MVP de Leads no Supabase)
     const data = localStorage.getItem(DB_KEYS.TAGS);
-    return data ? JSON.parse(data) : [];
+    return data ? JSON.parse(data) : INITIAL_TAGS;
   },
 
   createLead: async (data: Omit<Lead, 'id' | 'createdAt'> & { id?: string, createdAt?: string }): Promise<Lead> => {
-    await delay(400);
-    const leads = JSON.parse(localStorage.getItem(DB_KEYS.LEADS) || '[]');
-    
-    // Constrói o novo Lead garantindo ID único e Data formatada se não fornecidos
-    const newLead: Lead = {
+    // Objeto formatado para Frontend
+    const newLeadFrontend: Lead = {
       ...data,
       id: data.id || `lead_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       createdAt: data.createdAt || new Date().toISOString().split('T')[0],
       tags: data.tags || []
     };
 
-    const newLeads = [newLead, ...leads];
-    localStorage.setItem(DB_KEYS.LEADS, JSON.stringify(newLeads));
-    return newLead;
+    try {
+      // Tenta salvar no Supabase
+      const dbPayload = {
+        nome: data.name,
+        telefone: data.phone,
+        email: data.email,
+        origem: data.source,
+        mensagem: data.message,
+        campanha: data.campaign,
+        etiquetas: data.tags,
+        created_at: new Date().toISOString()
+      };
+
+      const { data: insertedData, error } = await supabase
+        .from('leads')
+        .insert([dbPayload])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Retorna com ID real do banco se sucesso
+      return {
+        ...newLeadFrontend,
+        id: insertedData.id,
+        createdAt: insertedData.created_at.split('T')[0]
+      };
+
+    } catch (error: any) {
+      console.warn('⚠️ Falha ao salvar no Supabase (Salvando localmente):', error.message || error);
+      
+      // Fallback: Salva no LocalStorage
+      const currentLeads = getLocalLeads();
+      saveLocalLeads([newLeadFrontend, ...currentLeads]);
+      
+      return newLeadFrontend;
+    }
   },
 
-  updateLead: async (updatedLead: Lead): Promise<Lead> => {
-    const leads = JSON.parse(localStorage.getItem(DB_KEYS.LEADS) || '[]');
-    const newLeads = leads.map((l: Lead) => l.id === updatedLead.id ? updatedLead : l);
-    localStorage.setItem(DB_KEYS.LEADS, JSON.stringify(newLeads));
-    return updatedLead;
-  },
-  
-  // Specific method for Kanban drag-and-drop to handle tag switching logic
   moveLeadStage: async (leadId: string, newStageTagId: string, allTags: Tag[]): Promise<void> => {
-    const leads = JSON.parse(localStorage.getItem(DB_KEYS.LEADS) || '[]');
+    // Atualiza localmente primeiro (Optimistic UI já feito no componente, mas garantimos persistência local)
+    const currentLeads = getLocalLeads();
     const stageTagIds = allTags.filter(t => t.isKanbanColumn).map(t => t.id);
     
-    const newLeads = leads.map((lead: Lead) => {
+    const updatedLeads = currentLeads.map(lead => {
         if (lead.id !== leadId) return lead;
-        
-        // Remove existing stage tags
         const cleanTags = lead.tags.filter(tId => !stageTagIds.includes(tId));
-        // Add new stage tag
         return { ...lead, tags: [...cleanTags, newStageTagId] };
     });
-    
-    localStorage.setItem(DB_KEYS.LEADS, JSON.stringify(newLeads));
+    saveLocalLeads(updatedLeads);
+
+    try {
+      // Tenta atualizar no Supabase
+      // 1. Buscar lead atual para pegar as tags atuais do banco (para não sobrescrever errado em caso de race condition)
+      const { data: currentLead, error: fetchError } = await supabase
+        .from('leads')
+        .select('etiquetas')
+        .eq('id', leadId)
+        .single();
+      
+      if (fetchError) throw fetchError;
+
+      const currentTagsDb: string[] = currentLead.etiquetas || [];
+      const cleanTagsDb = currentTagsDb.filter(tId => !stageTagIds.includes(tId));
+      const newTagsDb = [...cleanTagsDb, newStageTagId];
+
+      const { error: updateError } = await supabase
+        .from('leads')
+        .update({ etiquetas: newTagsDb })
+        .eq('id', leadId);
+
+      if (updateError) throw updateError;
+
+    } catch (error: any) {
+      console.warn('⚠️ Falha ao atualizar Supabase (Estado salvo localmente):', error.message || error);
+    }
   },
 
   reset: () => {
@@ -82,5 +166,4 @@ export const db = {
   }
 };
 
-// Initialize DB on load
 db.init();
