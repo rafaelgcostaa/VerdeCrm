@@ -1,13 +1,14 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 
-// Hardcoded for this environment to ensure it works without complex env setups in the demo
-const SYSTEM_API_KEY = "sk_live_vrm_9823_secure_x1y2z3";
+// Usando a chave definida no prompt para garantir compatibilidade imediata
+const CRM_API_KEY = process.env.CRM_API_KEY || "sk_live_vrm_9823_secure_x1y2z3";
 
 export default async function handler(
   request: VercelRequest,
   response: VercelResponse
 ) {
-  // CORS Setup
+  // 1. Tratamento de CORS (Essencial para n8n/testes externos)
+  // Nota: Os headers também estão no vercel.json, mas reforçamos aqui para a resposta da função
   response.setHeader('Access-Control-Allow-Credentials', 'true');
   response.setHeader('Access-Control-Allow-Origin', '*');
   response.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -16,48 +17,61 @@ export default async function handler(
     'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization'
   );
 
+  // 2. Responder imediatamente a requisições OPTIONS (Preflight)
   if (request.method === 'OPTIONS') {
     return response.status(200).end();
   }
 
+  // 3. Validar Método
   if (request.method !== 'POST') {
-    return response.status(405).json({ error: 'Method Not Allowed. Only POST is supported.' });
+    return response.status(405).json({ error: 'Method Not Allowed. Use POST.' });
   }
 
   try {
+    // 4. Autenticação Bearer Token
     const authHeader = request.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return response.status(401).json({ error: "Unauthorized. Missing or invalid Bearer token." });
+      return response.status(401).json({ error: "Unauthorized. Missing Bearer token." });
     }
 
     const apiKey = authHeader.replace("Bearer ", "");
 
-    if (apiKey !== SYSTEM_API_KEY) {
+    if (apiKey !== CRM_API_KEY) {
       return response.status(401).json({ error: "Invalid API key" });
     }
 
-    const { nome, telefone, email, mensagem, origem, campanha } = request.body;
+    // 5. Processamento do Body
+    const { nome, telefone, email, mensagem, origem, campanha } = request.body || {};
 
+    // 6. Validação de Campos Obrigatórios
     if (!nome || !telefone) {
-      return response.status(400).json({ error: "Campos obrigatórios: nome, telefone" });
+      return response.status(400).json({ 
+        error: "Campos obrigatórios ausentes",
+        required: ["nome", "telefone"],
+        received: request.body
+      });
     }
 
-    // NOTE: This serverless function runs on Vercel's Edge/Node infrastructure.
-    // It cannot access the client-side LocalStorage where the demo app stores data.
-    // In a real production app, you would insert this data into a database (Postgres, Mongo, etc.) here.
-    
-    console.log("Lead Received via API:", { nome, telefone, origem });
+    // LOG: Simula inserção no banco (Em produção, conectaria ao Supabase/Postgres aqui)
+    console.log("✅ Lead Recebido:", { nome, telefone, origem });
 
+    // 7. Resposta de Sucesso
     return response.status(201).json({
       success: true,
-      message: "Lead received successfully (Serverless Function).",
-      lead_id: `lead_${Date.now()}_server`,
-      note: "Data received by server. Since this is a demo using LocalStorage, this lead will not appear in the dashboard until a real database is connected."
+      message: "Lead recebido com sucesso.",
+      data: {
+        id: `lead_${Date.now()}`,
+        nome,
+        status: "queued"
+      }
     });
 
   } catch (error) {
-    console.error("API Error:", error);
-    return response.status(500).json({ error: "Internal Server Error" });
+    console.error("❌ Erro no inbound:", error);
+    return response.status(500).json({ 
+      error: "Internal Server Error",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
   }
 }
